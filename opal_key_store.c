@@ -93,7 +93,7 @@ static unsigned char *convert_hexstring(const char *hs, size_t len)
 /*
  * Get user password from the terminal
  */
-static char *get_password(void) {
+static char *get_password(const char *device) {
 	char *password;
 	size_t n;
 	int passlen;
@@ -106,7 +106,7 @@ static char *get_password(void) {
 	tp_mod.c_lflag |= (ECHONL | ICANON);
 	tcsetattr(1, TCSADRAIN, &tp_mod);
 
-	printf("Enter drive lock password: ");
+	printf("Enter password for %s: ", device);
 	password = NULL;
 	n = 0;
 	passlen = getline(&password, &n, stdin);
@@ -316,7 +316,7 @@ int main (int argc, char **argv)
 	// 2. Direct copy of input password (no hashing)
 	// 3. PBKDF2 (in the style of sedutil) applied to input password
 	if (!hex_input) {
-		password = get_password();
+		password = get_password(device);
 		if (password == NULL) {
 			fprintf(stderr, "Failed to read password\n");
 			exit(EXIT_FAILURE);
