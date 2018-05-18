@@ -100,7 +100,7 @@ static unsigned char *get_device_sn(const char *device)
 static unsigned char *sedutil_pbkdf2(const char *device, const char *pass)
 {
 	unsigned char *sn, *dk;
-	int ret, keylen = 32, passlen=-1, saltlen=20, iters=75000;
+	int keylen = 32, passlen=-1, saltlen=20, iters=75000;
 
 	sn = get_device_sn(device);
 	if (sn == NULL) {
@@ -210,7 +210,7 @@ static int opal_lu_ioctl(unsigned long request, const char *device,
 	}
 
 	if (ioctl(fd, request, opal_lu)) {
-		fprintf(stderr, "ioctl %ul on %s: %s\n",
+		fprintf(stderr, "ioctl %lu on %s: %s\n",
 		        request, device, strerror(errno));
 		close(fd);
 		return 1;
@@ -239,13 +239,13 @@ static unsigned char *convert_hexstring(const char *hs, size_t len)
 
 	if (strlen(hs) < len*2) {
 		fprintf(stderr, "Hex string is too short.\n");
-		fprintf(stderr, "Expected %d bytes.\n", len);
+		fprintf(stderr, "Expected %d bytes.\n", (int)len);
 		return NULL;
 	}
 
 	if (strlen(hs) > len*2) {
 		fprintf(stderr, "Hex string longer than allowed.\n");
-		fprintf(stderr, "Truncating to %d bytes.\n", len);
+		fprintf(stderr, "Truncating to %d bytes.\n", (int)len);
 	}
 
 	out = malloc(len);
@@ -311,7 +311,7 @@ int main (int argc, char **argv)
 		}
 		if (no_hash) {
 			key = calloc(32, 1);
-			if (key) strncpy(key, password, 32);
+			if (key) strncpy((char *)key, password, 32);
 		} else {
 			key = sedutil_pbkdf2(device, password);
 		}
