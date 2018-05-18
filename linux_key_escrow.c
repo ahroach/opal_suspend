@@ -1,4 +1,7 @@
 /*
+ * Pass the drive unlock credential to the Linux kernel to be used after
+ * system resume
+ *
  * Compile with -lcrypto
  */
 
@@ -15,14 +18,7 @@
 #include <linux/nvme_ioctl.h>
 #include <linux/sed-opal.h>
 
-// See sedutil source: Common/DtaHashPwd.cpp
-// SHA1 HMAC used
-// Salted with first 20 bytes of serial number
-// From DtaHashPwd.h : dfeault iter = 75000,
-// hashsize = 32
-
-
-void hexdump(uint8_t *buf, int buflen)
+static void print_hexstring(const unsigned char *buf, int buflen)
 {
 	for (int i = 0; i < buflen; i++) {
 		printf("%02hhx", buf[i]);
@@ -30,85 +26,112 @@ void hexdump(uint8_t *buf, int buflen)
 	printf("\n");
 }
 
+static void clear_and_free(void *buf, int buflen)
+{
+	memset(buf, 0, buflen);
+	free(buf);
+}
+
+/*
+ * Get device serial number using the NVME_IOCTL_ADMIN_CMD ioctl
+ * See linux/nvme_ioctl.h.
+ * Note that struct nvme_admin_cmd is an alias for struct nvme_passthru_cmd.
+ * Command parameters (opcode, nsid, addr, data_len, cdw10) defined in the
+ * NVM Express spec. In Rev. 1.3a, see Section 5.15: Identify Command
+ */
 static unsigned char *get_device_sn(const char *device)
 {
-	// See linux/nvme_ioct.h
-	// struct nvme_admin_cmd alias for struct nvme_passthru_cmd
 	struct nvme_admin_cmd id_cmd;
-	uint8_t *id_res;
-	unsigned char *sn;
+	unsigned char *id_ctrlr_ds, *sn;
 	int fd;
 	
-	id_res = malloc(4096);
-	if (id_res == NULL) {
+	id_ctrlr_ds = malloc(4096);
+	if (id_ctrlr_ds == NULL) {
 		perror("malloc");
-		exit(EXIT_FAILURE);
+		return NULL;
 	}
 
+	// Unused fields will be set to zero
 	memset(&id_cmd, 0, sizeof(id_cmd));
-	// See NVM Express specification
-	// Rev. 1.3a, Section 5.15 Identify command
+
 	id_cmd.opcode = 0x06;
 	id_cmd.nsid = 0;
-	id_cmd.addr = (uint64_t)id_res;
+	id_cmd.addr = (uint64_t)id_ctrlr_ds;
 	id_cmd.data_len = 4096;
-	// Return Identify Controller data structure
-	id_cmd.cdw10 = 1;
+	id_cmd.cdw10 = 1; // Return Identify Controller data structure
 
 	fd = open(device, O_RDONLY);
 	if (fd < 0) {
-		fprintf(stderr, "open() on %s: %s\n", device, strerror(errno));
-		exit(EXIT_FAILURE);
+		fprintf(stderr, "open(%s, O_RDONLY): %s\n",
+		        device, strerror(errno));
+		free(id_ctrlr_ds);
+		return NULL;
 	}
 	if (ioctl(fd, NVME_IOCTL_ADMIN_CMD, &id_cmd)) {
-		fprintf(stderr, "Error in IDENTIFY\n");
-		exit(EXIT_FAILURE);
+		perror("NVME_IOCTL_ADMIN_CMD ioctl:");
+		free(id_ctrlr_ds);
+		close(fd);
+		return NULL;
 	}
-
 	close(fd);
 	
 	sn = malloc(20);
 	if (sn == NULL) {
 		perror("malloc");
-		exit(EXIT_FAILURE);
+		free(id_ctrlr_ds);
+		return NULL;
 	}
 
-	// Serial number: 20 bytes starting at offset 0x4
-	memcpy(sn, id_res + 4, 20);
+	// Serial number: 20 bytes stored at offset 0x4
+	memcpy(sn, id_ctrlr_ds + 4, 20);
 
-	free(id_res);
+	free(id_ctrlr_ds);
 	return sn;
 }
 
-static unsigned char *sedutil_pbkdf2(char *device, unsigned char *pass)
+/*
+ * Calls PBKDF2 in the sammer manner as sedutil to generate key from the
+ * user-provided password. See sedutil source: Common/DtaHashPwd.cpp
+ * Pseudo-random function: SHA1-HMAC
+ * Password length: string length of provided password
+ * Salt: Drive serial number (20 bytes)
+ * Iters: 75000; Derived key length 32 bytes
+ */
+static unsigned char *sedutil_pbkdf2(const char *device, const char *pass)
 {
-	unsigned char *out;
-	char *sn;
-	// Parameters as used in the sedutil PBKDF2 implementation
+	unsigned char *sn, *dk;
 	int ret, keylen = 32, passlen=-1, saltlen=20, iters=75000;
 
-	out = malloc(keylen);
-	if (out == NULL) {
-		perror("malloc");
-		exit(EXIT_FAILURE);
+	sn = get_device_sn(device);
+	if (sn == NULL) {
+		fprintf(stderr, "Error finding serial number for %s\n",
+		        device);
+		return NULL;
 	}
 
-	// Device serial number used as 20-byte salt for the PBKDF2
-	sn = get_device_sn(device);
+	dk = malloc(keylen);
+	if (dk == NULL) {
+		perror("malloc");
+		free(sn);
+		return NULL;
+	}
 
-	ret = PKCS5_PBKDF2_HMAC_SHA1(pass, passlen, sn, saltlen, iters,
-	                             keylen, out);
-	if (ret == 0) {
+	if (PKCS5_PBKDF2_HMAC_SHA1(pass, passlen, sn, saltlen, iters,
+	                           keylen, dk) == 0) {
 		fprintf(stderr, "Error in PKCS5_PBKDFS_HMAC_SHA1()\n");
-		exit(EXIT_FAILURE);
+		free(sn);
+		free(dk);
+		return NULL;
 	}
 
 	free(sn);
-
-	return out;
+	return dk;
 }
 
-char *get_password(void) {
+/*
+ * Get user password from the terminal
+ */
+static char *get_password(void) {
 	char *password;
 	size_t n;
 	int passlen;
@@ -121,101 +144,86 @@ char *get_password(void) {
 	tp_mod.c_lflag |= (ECHONL | ICANON);
 	tcsetattr(1, TCSADRAIN, &tp_mod);
 
-	printf("Password: ");
+	printf("Enter drive lock password: ");
 	password = NULL;
 	n = 0;
 	passlen = getline(&password, &n, stdin);
-
-	// Reset terminal attributes
-	tcsetattr(1, TCSADRAIN, &tp_orig);
-	
 	if (passlen == -1) {
-		fprintf(stderr, "Error reading password\n");
-		exit(EXIT_FAILURE);
+		perror("getline()");
+		if (password) free(password);
+		tcsetattr(1, TCSADRAIN, &tp_orig);
+		return NULL;
 	}
 
-	// Discard newlines
-	if (password[passlen-1] == '\n') {
-		password[passlen-1] = 0;
-	}
+	// Restore terminal parameters
+	tcsetattr(1, TCSADRAIN, &tp_orig);
+
+	// Discard newline
+	if (password[passlen-1] == '\n') password[passlen-1] = 0;
 
 	return password;
 }
 
-int opal_unlock(char *device, unsigned char *key)
+/*
+ * Generate the struct opal_lock_unlock used by both the IOC_OPAL_LOCK_UNLOCK
+ * ioctl and the IOC_OPAL_SAVE ioctl. The structure and substructures are
+ * defined in linux/sed-opal.h
+ */
+static struct opal_lock_unlock *gen_opal_lu(const unsigned char *key)
 {
-	// That the device *must* point to the namespace
-	// (for example /dev/nvme0n1), rather than the higher level
-	// /dev/nvme0. If not, the ioctl will fail with
-	// "Inappropriate ioctl for device"
-	//
-	int fd;
-	// Defined in linux/sed-opal.h
-	struct opal_lock_unlock opal_lu;
+	struct opal_lock_unlock *opal_lu;
 
-	memset(&opal_lu, 0, sizeof(opal_lu));
-	opal_lu.session.sum = 0; // Not in single-user mode
-	opal_lu.session.who = OPAL_ADMIN1;
-	opal_lu.session.opal_key.lr = 0; // Locking range 0
-	opal_lu.session.opal_key.key_len = 32;
-	memcpy(opal_lu.session.opal_key.key, key, 32);
-	opal_lu.l_state = OPAL_RW;
-
-	fd = open(device, O_WRONLY);
-	if (fd < 0) {
-		fprintf(stderr, "open() on %s: %s\n", device, strerror(errno));
-		exit(EXIT_FAILURE);
+	opal_lu = malloc(sizeof(struct opal_lock_unlock));
+	if (opal_lu == NULL) {
+		perror("malloc");
+		return NULL;
 	}
-	if (ioctl(fd, IOC_OPAL_LOCK_UNLOCK, &opal_lu)) {
-		fprintf(stderr, "ioctl IOC_OPAL_LOCK_UNLOCK on %s: %s\n",
-		        device, strerror(errno));
-		exit(EXIT_FAILURE);
-	}
+	memset(opal_lu, 0, sizeof(struct opal_lock_unlock));
+	opal_lu->session.sum = 0; // Not in single-user mode
+	opal_lu->session.who = OPAL_ADMIN1;
+	opal_lu->session.opal_key.lr = 0; // Locking range 0
+	opal_lu->session.opal_key.key_len = 32;
+	memcpy(opal_lu->session.opal_key.key, key, 32);
+	opal_lu->l_state = OPAL_RW;
 
-	close(fd);
-
-	return 0;
+	return opal_lu;
 }
 
-int opal_save(char *device, unsigned char *key)
+/*
+ * Issue an IOCTL that uses a struct opal_lock_unlock.  See linux/sed-opal.h.
+ * Both IOC_OPAL_SAVE and IOC_OPAL_LOCK_UNLOCK use the same structure.
+ *
+ * Note that the device name must correspond to the *namespace* of the device
+ * that you want to operate on ("/dev/nvme0n1", for example, rather than
+ * "/dev/nvme0"). Otherwise, the ioctl will likely fail with "Inappropriate
+ * ioctl for device.)
+ */
+static int opal_lu_ioctl(unsigned long request, const char *device,
+                         const struct opal_lock_unlock *opal_lu)
 {
-	// That the device *must* point to the namespace
-	// (for example /dev/nvme0n1), rather than the higher level
-	// /dev/nvme0. If not, the ioctl will fail with
-	// "Inappropriate ioctl for device"
-	//
 	int fd;
-	// Defined in linux/sed-opal.h
-	struct opal_lock_unlock opal_lu;
-
-	memset(&opal_lu, 0, sizeof(opal_lu));
-	opal_lu.session.sum = 0; // Not in single-user mode
-	opal_lu.session.who = OPAL_ADMIN1;
-	opal_lu.session.opal_key.lr = 0; // Locking range 0
-	opal_lu.session.opal_key.key_len = 32;
-	memcpy(opal_lu.session.opal_key.key, key, 32);
-	opal_lu.l_state = OPAL_RW;
 
 	fd = open(device, O_WRONLY);
 	if (fd < 0) {
 		fprintf(stderr, "open() on %s: %s\n", device, strerror(errno));
-		exit(EXIT_FAILURE);
+		return 1;
 	}
-	if (ioctl(fd, IOC_OPAL_SAVE, &opal_lu)) {
-		fprintf(stderr, "ioctl IOC_OPAL_SAVE on %s: %s\n",
-		        device, strerror(errno));
-		exit(EXIT_FAILURE);
+
+	if (ioctl(fd, request, opal_lu)) {
+		fprintf(stderr, "ioctl %ul on %s: %s\n",
+		        request, device, strerror(errno));
+		close(fd);
+		return 1;
 	}
-	printf("Issued IOC_OPAL_SAVE\n");
 
 	close(fd);
-
 	return 0;
 }
 
 int main (int argc, char **argv) {
 	char *device, *password; 
 	unsigned char *key;
+	struct opal_lock_unlock *opal_lu;
 
 	if (argc != 2) {
 		fprintf(stderr, "Usage: %s device\n", argv[0]);
@@ -225,19 +233,42 @@ int main (int argc, char **argv) {
 	device= argv[1];
 
 	password = get_password();
+	if (password == NULL) {
+		fprintf(stderr, "Failed to read password\n");
+		exit(EXIT_FAILURE);
+	}
 	key = sedutil_pbkdf2(device, password);
-	memset(password, 0, strlen(password));
-	free(password);
+	clear_and_free(password, strlen(password));
+	if (key == NULL) {
+		fprintf(stderr, "Failed to generate key\n");
+		exit(EXIT_FAILURE);
+	}
 
-	hexdump(key, 32);
+	print_hexstring(key, 32);
+	opal_lu = gen_opal_lu(key);
+	clear_and_free(key, 32);
+	if (opal_lu == NULL) {
+		fprintf(stderr,
+		        "Failed to generate struct opal_lock_unlock\n");
+		exit(EXIT_FAILURE);
+	}
 
-	// We already unlocked when we booted. But we issue another unlock just
-	// to verify that we have the correct key.
-	opal_unlock(device, key);
-	opal_save(device, key);
+	// If you provide the incorrect credential through the IOC_OPAL_SAVE
+	// ioctl, there is no feedback. Instead, your machine just stops
+	// working while trying to return from suspend.  But the
+	// IOC_OPAL_LOCK_UNLOCK ioctl *does* fail with an incorrect credential.
+	// So we'll try to unlock with the provided credential, even though the
+	// range is already unlocked, and notify if this ioctl fails.
+	if (opal_lu_ioctl(IOC_OPAL_LOCK_UNLOCK, device, opal_lu)) {
+		fprintf(stderr, "Unlock failed. Incorrect password?\n");
+		exit(EXIT_FAILURE);
+	}
+	if (opal_lu_ioctl(IOC_OPAL_SAVE, device, opal_lu)) {
+		fprintf(stderr, "Failed to save credential.\n");
+		exit(EXIT_FAILURE);
+	}
 
-	free(key);
-
+	clear_and_free(opal_lu, sizeof(struct opal_lock_unlock));
 	return 0;
 }
 
