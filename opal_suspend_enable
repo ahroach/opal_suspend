@@ -1,0 +1,17 @@
+#!/bin/bash
+
+# Look for all nvme disks. Assume that they'll all need credentials. Could
+# use sedutil, nvme-cli, or our own tool to verify if they have OPAL locking
+# ranges, but ... future enhancement.
+
+for dev in `(lsblk -lp | grep .*nvme.*disk | awk '{print $1}')`
+do
+	if ! opal_key_store $dev; then
+		echo "Failed to pass key for device. Suspend not enabled."
+		exit
+	fi
+done
+
+# Store status
+echo "1" > /run/opal_suspend_enabled
+

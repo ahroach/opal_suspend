@@ -4,7 +4,7 @@ CC = gcc
 LDCONFIG = /sbin/ldconfig
 CP = /bin/cp
 
-INSTALL_BIN_DIR = /usr/local/bin
+INSTALL_BIN_DIR = /usr/local/sbin
 
 CFLAGS = -Wall
 LIBS = -lcrypto
@@ -15,6 +15,11 @@ opal_key_store:
 
 install:
 	$(CP) opal_key_store $(INSTALL_BIN_DIR)
+	$(CP) opal_suspend_enable $(INSTALL_BIN_DIR)
+
+uninstall:
+	$(RM) $(INSTALL_BIN_DIR)/opal_key_store
+	$(RM) $(INSTALL_BIN_DIR)/opal_suspend_enable
 
 .PHONY: clean
 
