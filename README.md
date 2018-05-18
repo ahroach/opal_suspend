@@ -1,5 +1,5 @@
-opal\_suspend: Store TCG OPAL key in Linux kernel
-====================================================
+opal\_suspend: Userspace tools for suspend-to-RAM with TCG OPAL SEDs
+====================================================================
 
 The TCG OPAL encryption standard, used in many self encrypting drives (SEDs),
 can create problems when used in conjunction with suspend-to-RAM. When the
