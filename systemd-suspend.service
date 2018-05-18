@@ -10,8 +10,7 @@
 #  (at your option) any later version.
 
 [Unit]
-Description=Suspend
-Documentation=man:systemd-suspend.service(8)
+Description=opal_suspend modified from stock systemd Suspend
 DefaultDependencies=no
 Requires=sleep.target
 After=sleep.target
