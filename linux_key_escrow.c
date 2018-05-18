@@ -18,7 +18,7 @@
 #include <linux/nvme_ioctl.h>
 #include <linux/sed-opal.h>
 
-static void print_hexstring(const unsigned char *buf, int buflen)
+static void print_hexstring(const unsigned char *buf, size_t buflen)
 {
 	for (int i = 0; i < buflen; i++) {
 		printf("%02hhx", buf[i]);
@@ -26,7 +26,7 @@ static void print_hexstring(const unsigned char *buf, int buflen)
 	printf("\n");
 }
 
-static void clear_and_free(void *buf, int buflen)
+static void clear_and_free(void *buf, size_t buflen)
 {
 	memset(buf, 0, buflen);
 	free(buf);
@@ -220,31 +220,113 @@ static int opal_lu_ioctl(unsigned long request, const char *device,
 	return 0;
 }
 
-int main (int argc, char **argv) {
+static void show_help(char **argv)
+{
+	fprintf(stderr, "Usage: %s [-h] [-n] [-p] [-x hexstring] device\n",
+	        argv[0]);
+	fprintf(stderr,
+		" -h  Show help\n"
+	        " -n  Don't hash password\n"
+	        " -p  Print hexstring of key\n"
+	        " -x  Provide 32-byte key hexstring; No password prompt\n");
+	exit(EXIT_FAILURE);
+}
+
+static unsigned char *convert_hexstring(const char *hs, size_t len)
+{
+	unsigned char *out;
+	int n;
+
+	if (strlen(hs) < len*2) {
+		fprintf(stderr, "Hex string is too short.\n");
+		fprintf(stderr, "Expected %d bytes.\n", len);
+		return NULL;
+	}
+
+	if (strlen(hs) > len*2) {
+		fprintf(stderr, "Hex string longer than allowed.\n");
+		fprintf(stderr, "Truncating to %d bytes.\n", len);
+	}
+
+	out = malloc(len);
+	if (out == NULL) {
+		perror("malloc");
+		return NULL;
+	}
+
+	for (size_t i = 0; i < len; i++) {
+		n = sscanf(hs + i*2, "%02hhx", out + i);
+		if (n != 1) {
+			fprintf(stderr, "Error parsing hex string\n");
+			free(out);
+			return NULL;
+		}
+	}
+
+	return out;
+}
+
+int main (int argc, char **argv)
+{
+	int opt, print_key = 0, hex_input = 0, no_hash = 0;
 	char *device, *password; 
 	unsigned char *key;
 	struct opal_lock_unlock *opal_lu;
 
-	if (argc != 2) {
-		fprintf(stderr, "Usage: %s device\n", argv[0]);
-		exit(EXIT_FAILURE);
+	while ((opt = getopt(argc, argv, "hnpx:")) != -1) {
+		switch (opt) {
+			case 'h':
+				show_help(argv);
+				break;
+			case 'n':
+				no_hash = 1;
+				break;
+			case 'p':
+				print_key = 1;
+				break;
+			case 'x':
+				hex_input = 1;
+				// Checked for successful return after
+				// other key generation steps below
+				key = convert_hexstring(optarg, 32);
+				break;
+			default:
+				show_help(argv);
+		}
 	}
 
-	device= argv[1];
+	// Only regmaining argument should be the device name
+	if ((argc - optind) != 1) show_help(argv);
+	device = argv[optind];
 
-	password = get_password();
-	if (password == NULL) {
-		fprintf(stderr, "Failed to read password\n");
-		exit(EXIT_FAILURE);
+	// Key can come from three sources:
+	// 1. Hexstring from the command-line option, parsed above
+	// 2. Direct copy of input password (no hashing)
+	// 3. PBKDF2 (in the style of sedutil) applied to input password
+	if (!hex_input) {
+		password = get_password();
+		if (password == NULL) {
+			fprintf(stderr, "Failed to read password\n");
+			exit(EXIT_FAILURE);
+		}
+		if (no_hash) {
+			key = calloc(32, 1);
+			if (key) strncpy(key, password, 32);
+		} else {
+			key = sedutil_pbkdf2(device, password);
+		}
+		clear_and_free(password, strlen(password));
 	}
-	key = sedutil_pbkdf2(device, password);
-	clear_and_free(password, strlen(password));
 	if (key == NULL) {
 		fprintf(stderr, "Failed to generate key\n");
 		exit(EXIT_FAILURE);
 	}
 
-	print_hexstring(key, 32);
+	if (print_key) {
+		printf("Key: ");
+		print_hexstring(key, 32);
+	}
+
 	opal_lu = gen_opal_lu(key);
 	clear_and_free(key, 32);
 	if (opal_lu == NULL) {
@@ -253,12 +335,12 @@ int main (int argc, char **argv) {
 		exit(EXIT_FAILURE);
 	}
 
-	// If you provide the incorrect credential through the IOC_OPAL_SAVE
-	// ioctl, there is no feedback. Instead, your machine just stops
-	// working while trying to return from suspend.  But the
-	// IOC_OPAL_LOCK_UNLOCK ioctl *does* fail with an incorrect credential.
-	// So we'll try to unlock with the provided credential, even though the
-	// range is already unlocked, and notify if this ioctl fails.
+	// If you provide the incorrect keythrough the IOC_OPAL_SAVE ioctl,
+	// there is no feedback. Instead, your machine just stops working while
+	// trying to return from suspend. But the IOC_OPAL_LOCK_UNLOCK ioctl
+	// *does* report failure when provided an incorrect key. So we'll try
+	// to unlock with the provided key, even though the range was already
+	// unlocked during boot, and notify if this ioctl fails.
 	if (opal_lu_ioctl(IOC_OPAL_LOCK_UNLOCK, device, opal_lu)) {
 		fprintf(stderr, "Unlock failed. Incorrect password?\n");
 		exit(EXIT_FAILURE);
