@@ -1,4 +1,4 @@
-opal\_key\_store: Store TCG OPAL key in Linux kernel
+opal\_suspend: Store TCG OPAL key in Linux kernel
 ====================================================
 
 The TCG OPAL encryption standard, used in many self encrypting drives (SEDs),
@@ -28,6 +28,10 @@ Features
   hexstring
 * Optionally prints out key, to allow saving hexstring of PBKDF2-derived key
   for later re-use
+* Wrapper script saves keys for SEDs and saves state for evaluation when
+  suspend is requested
+* A modified systemd service optionally suspends or hibernates when a suspend
+  is requested, depending on whether keys have been saved in the kernel
 
 Installation
 ------------
@@ -44,8 +48,8 @@ To install:
 
 	make install
 
-Usage
------
+opal\_key\_store usage
+----------------------
 
 The user runs:
 
@@ -75,11 +79,36 @@ And to pass a binary key directly to the drive:
 
 	opal_key_store -x 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff /dev/nvme0n1
 
+Higher-level userspace tools
+----------------------------
+
+This toolset includes a wrapper script, `opal_suspend_enable`, that requests
+provides keys to kernel for each identified NVMe drive. It stores a marker at
+`/run/opal_suspend_enabled` so other processes can check to see that the keys
+have been saved.
+
+A modified systemd-suspend.service file is also included. When suspend is
+requested, it checks the marker at `/run/opal_suspend_enabled`. If it does
+not exist, it assumes that the keys have not been saved. Suspend in this
+scenario could be disastrous, so it executes a suspend-to-disk (hibernate)
+instead. If the keys have been saved, it continues on with suspend-to-RAM.
+
+To enable suspend, a user simply needs to execute:
+
+	opal_suspend_enable
+
+as root at any point, and provide the requested passwords. From that point on,
+suspend-to-RAM will function properly.
+
+It would be easy to modify this script to provide credentials automatically
+at startup, via the hexstring entry method described above.
+
 Limitations
 -----------
 
 This implementation makes several assumptions about the operating environment:
 
+* Every nvme disk is self-encrypting and requires a password
 * There is a single Locking Range, number 0
 * The user will be providing the ADMIN1 password
 * The key length is 32 bytes
