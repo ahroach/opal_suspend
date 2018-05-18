@@ -18,6 +18,24 @@
 #include <linux/nvme_ioctl.h>
 #include <linux/sed-opal.h>
 
+static void show_help(char **argv)
+{
+	fprintf(stderr, "Usage: %s [-h] [-n] [-p] [-x hexstring] device\n",
+	        argv[0]);
+	fprintf(stderr,
+		" -h  Show help\n"
+	        " -n  Don't hash password\n"
+	        " -p  Print hexstring of key\n"
+	        " -x  Provide 32-byte key hexstring; No password prompt\n");
+	exit(EXIT_FAILURE);
+}
+
+static void clear_and_free(void *buf, size_t buflen)
+{
+	memset(buf, 0, buflen);
+	free(buf);
+}
+
 static void print_hexstring(const unsigned char *buf, size_t buflen)
 {
 	for (int i = 0; i < buflen; i++) {
@@ -26,10 +44,74 @@ static void print_hexstring(const unsigned char *buf, size_t buflen)
 	printf("\n");
 }
 
-static void clear_and_free(void *buf, size_t buflen)
+static unsigned char *convert_hexstring(const char *hs, size_t len)
 {
-	memset(buf, 0, buflen);
-	free(buf);
+	unsigned char *out;
+	int n;
+
+	if (strlen(hs) < len*2) {
+		fprintf(stderr, "Hex string is too short.\n");
+		fprintf(stderr, "Expected %d bytes.\n", (int)len);
+		return NULL;
+	}
+
+	if (strlen(hs) > len*2) {
+		fprintf(stderr, "Hex string longer than allowed.\n");
+		fprintf(stderr, "Truncating to %d bytes.\n", (int)len);
+	}
+
+	out = malloc(len);
+	if (out == NULL) {
+		perror("malloc");
+		return NULL;
+	}
+
+	for (size_t i = 0; i < len; i++) {
+		n = sscanf(hs + i*2, "%02hhx", out + i);
+		if (n != 1) {
+			fprintf(stderr, "Error parsing hex string\n");
+			free(out);
+			return NULL;
+		}
+	}
+
+	return out;
+}
+
+/*
+ * Get user password from the terminal
+ */
+static char *get_password(void) {
+	char *password;
+	size_t n;
+	int passlen;
+	struct termios tp_orig, tp_mod;
+
+	// Disable terminal echoing for password input
+	tcgetattr(1, &tp_orig);
+	tp_mod = tp_orig;
+	tp_mod.c_lflag &= ~ECHO;
+	tp_mod.c_lflag |= (ECHONL | ICANON);
+	tcsetattr(1, TCSADRAIN, &tp_mod);
+
+	printf("Enter drive lock password: ");
+	password = NULL;
+	n = 0;
+	passlen = getline(&password, &n, stdin);
+	if (passlen == -1) {
+		perror("getline()");
+		if (password) free(password);
+		tcsetattr(1, TCSADRAIN, &tp_orig);
+		return NULL;
+	}
+
+	// Restore terminal parameters
+	tcsetattr(1, TCSADRAIN, &tp_orig);
+
+	// Discard newline
+	if (password[passlen-1] == '\n') password[passlen-1] = 0;
+
+	return password;
 }
 
 /*
@@ -129,42 +211,6 @@ static unsigned char *sedutil_pbkdf2(const char *device, const char *pass)
 }
 
 /*
- * Get user password from the terminal
- */
-static char *get_password(void) {
-	char *password;
-	size_t n;
-	int passlen;
-	struct termios tp_orig, tp_mod;
-
-	// Disable terminal echoing for password input
-	tcgetattr(1, &tp_orig);
-	tp_mod = tp_orig;
-	tp_mod.c_lflag &= ~ECHO;
-	tp_mod.c_lflag |= (ECHONL | ICANON);
-	tcsetattr(1, TCSADRAIN, &tp_mod);
-
-	printf("Enter drive lock password: ");
-	password = NULL;
-	n = 0;
-	passlen = getline(&password, &n, stdin);
-	if (passlen == -1) {
-		perror("getline()");
-		if (password) free(password);
-		tcsetattr(1, TCSADRAIN, &tp_orig);
-		return NULL;
-	}
-
-	// Restore terminal parameters
-	tcsetattr(1, TCSADRAIN, &tp_orig);
-
-	// Discard newline
-	if (password[passlen-1] == '\n') password[passlen-1] = 0;
-
-	return password;
-}
-
-/*
  * Generate the struct opal_lock_unlock used by both the IOC_OPAL_LOCK_UNLOCK
  * ioctl and the IOC_OPAL_SAVE ioctl. The structure and substructures are
  * defined in linux/sed-opal.h
@@ -218,52 +264,6 @@ static int opal_lu_ioctl(unsigned long request, const char *device,
 
 	close(fd);
 	return 0;
-}
-
-static void show_help(char **argv)
-{
-	fprintf(stderr, "Usage: %s [-h] [-n] [-p] [-x hexstring] device\n",
-	        argv[0]);
-	fprintf(stderr,
-		" -h  Show help\n"
-	        " -n  Don't hash password\n"
-	        " -p  Print hexstring of key\n"
-	        " -x  Provide 32-byte key hexstring; No password prompt\n");
-	exit(EXIT_FAILURE);
-}
-
-static unsigned char *convert_hexstring(const char *hs, size_t len)
-{
-	unsigned char *out;
-	int n;
-
-	if (strlen(hs) < len*2) {
-		fprintf(stderr, "Hex string is too short.\n");
-		fprintf(stderr, "Expected %d bytes.\n", (int)len);
-		return NULL;
-	}
-
-	if (strlen(hs) > len*2) {
-		fprintf(stderr, "Hex string longer than allowed.\n");
-		fprintf(stderr, "Truncating to %d bytes.\n", (int)len);
-	}
-
-	out = malloc(len);
-	if (out == NULL) {
-		perror("malloc");
-		return NULL;
-	}
-
-	for (size_t i = 0; i < len; i++) {
-		n = sscanf(hs + i*2, "%02hhx", out + i);
-		if (n != 1) {
-			fprintf(stderr, "Error parsing hex string\n");
-			free(out);
-			return NULL;
-		}
-	}
-
-	return out;
 }
 
 int main (int argc, char **argv)
