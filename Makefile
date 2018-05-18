@@ -1,4 +1,4 @@
-.DEFAULT_GOAL := linux_key_escrow
+.DEFAULT_GOAL := opal_key_store
 
 CC = gcc
 LDCONFIG = /sbin/ldconfig
@@ -8,13 +8,13 @@ INSTALL_BIN_DIR = /usr/local/bin
 
 CFLAGS = -Wall
 LIBS = -lcrypto
-PROGS = linux_key_escrow
+PROGS = opal_key_store
 
-linux_key_escrow:
-	$(CC) $(CFLAGS) -o linux_key_escrow linux_key_escrow.c $(LIBS)
+opal_key_store:
+	$(CC) $(CFLAGS) -o opal_key_store opal_key_store.c $(LIBS)
 
 install:
-	$(CP) linux_key_escrow $(INSTALL_BIN_DIR)
+	$(CP) opal_key_store $(INSTALL_BIN_DIR)
 
 .PHONY: clean
 
