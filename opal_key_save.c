@@ -1,5 +1,5 @@
 /*
- * opal_key_store - Store TCG OPAL key in Linux kernel for resume from suspend
+ * opal_key_save - Save TCG OPAL key in Linux kernel for resume from suspend
  *
  * Copyright 2018 Austin Roach <ahroach@gmail.com>
  *

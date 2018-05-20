@@ -6,7 +6,7 @@
 
 for dev in `(lsblk -lp | grep .*nvme.*disk | awk '{print $1}')`
 do
-	if ! opal_key_store $dev; then
+	if ! opal_key_save $dev; then
 		echo "Failed to pass key for device. Suspend not enabled."
 		exit
 	fi

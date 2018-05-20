@@ -36,7 +36,7 @@ Features
 Installation
 ------------
 
-opal\_key\_store is linked against OpenSSL's libcrypto, which provides the
+opal\_key\_save is linked against OpenSSL's libcrypto, which provides the
 PBKDF2 implementation. It also requires the Linux nvme\_ioctl.h and 
 sed-opal.h header files.
 
@@ -48,12 +48,12 @@ To install:
 
 	make install
 
-opal\_key\_store usage
+opal\_key\_save usage
 ----------------------
 
 The user runs:
 
-	opal_key_store [-h] [-n] [-p] [-x hexstring] device
+	opal_key_save [-h] [-n] [-p] [-x hexstring] device
 
 with the command-line arguments:
 
@@ -65,25 +65,25 @@ with the command-line arguments:
 As an example of typical invocation, using `sedutil`'s parameters for PBKDF2
 to hash the input password:
 
-	opal_key_store /dev/nvme0n1
+	opal_key_save /dev/nvme0n1
 
-To view the key that is provided to the drive:
+To view the key that is provided for the drive:
 
-	opal_key_store -p /dev/nvme0n1
+	opal_key_save -p /dev/nvme0n1
 
 To pass a password in the clear to the drive, without hashing:
 
-	opal_key_store -n /dev/nvme0n1
+	opal_key_save -n /dev/nvme0n1
 
-And to pass a binary key directly to the drive:
+And to save a hexadecimal key directory, to be passed to the drive:
 
-	opal_key_store -x 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff /dev/nvme0n1
+	opal_key_save -x 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff /dev/nvme0n1
 
 Higher-level userspace tools
 ----------------------------
 
 This toolset includes a wrapper script, `opal_suspend_enable`, that requests
-provides keys to kernel for each identified NVMe drive. It stores a marker at
+provides keys to kernel for each identified NVMe drive. It saves a marker at
 `/run/opal_suspend_enabled` so other processes can check to see that the keys
 have been saved.
 
