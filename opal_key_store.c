@@ -355,10 +355,12 @@ int main (int argc, char **argv)
 	// unlocked during boot, and notify if this ioctl fails.
 	if (opal_lu_ioctl(IOC_OPAL_LOCK_UNLOCK, device, opal_lu)) {
 		fprintf(stderr, "Unlock failed. Incorrect password?\n");
+		clear_and_free(opal_lu, sizeof(struct opal_lock_unlock));
 		exit(EXIT_FAILURE);
 	}
 	if (opal_lu_ioctl(IOC_OPAL_SAVE, device, opal_lu)) {
 		fprintf(stderr, "Failed to save credential.\n");
+		clear_and_free(opal_lu, sizeof(struct opal_lock_unlock));
 		exit(EXIT_FAILURE);
 	}
 
