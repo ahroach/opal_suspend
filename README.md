@@ -1,5 +1,5 @@
-opal\_suspend: Userspace tools for suspend-to-RAM with TCG OPAL SEDs
-====================================================================
+opal\_suspend: Userspace tools for suspend-to-RAM with NVMe TCG OPAL SEDs
+=========================================================================
 
 The TCG OPAL encryption standard, used in many self encrypting drives (SEDs),
 can create problems when used in conjunction with suspend-to-RAM. When the
@@ -22,6 +22,7 @@ pass the key through the provided ioctls.
 Features
 --------
 
+* Currently tailored for NVMe drives, but easily extended to SATA drives
 * Calls PBKDF2 with the same parameters as sedutil, to allow a user to input
   the same password that they would input to sedutil's PBA
 * Option to directly supply key as command-line argument, encoded as a
